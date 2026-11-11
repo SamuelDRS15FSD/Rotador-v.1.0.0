@@ -1,0 +1,17 @@
+{
+  "name": "Rotador - Control de Vencimientos",
+  "short_name": "Rotador",
+  "description": "Control de fechas de vencimiento de mercancia",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

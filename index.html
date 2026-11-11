@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Rotador - Control de Vencimientos</title>
+
+  <!-- PWA Meta -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <meta name="description" content="Control de vencimientos y gestión de precios para supermercado y carnicería">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#1a1a2e',
+            accent: '#0f3460',
+            action: '#e94560',
+            'action-hover': '#d63a54',
+            surface: '#16213e',
+            'surface-light': '#1f2b47',
+            'text-primary': '#e0e0e0',
+            'text-secondary': '#a0a0b0',
+            'exp-green': '#27ae60',
+            'exp-yellow': '#f39c12',
+            'exp-orange': '#e67e22',
+            'exp-red': '#e74c3c',
+            // Diferenciación cromática de secciones
+            'sec-auto': '#3b82f6',
+            'sec-auto-dark': '#1e3a8a',
+            'sec-atend': '#f59e0b',
+            'sec-atend-dark': '#78350f',
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- ZXing Barcode Scanner -->
+  <script src="https://unpkg.com/@zxing/library@0.21.3"></script>
+
+  <!-- jsPDF & AutoTable para Generación de Reportes en PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- Mozilla PDF.js para Carga Masiva desde Documentos PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+  <style>
+    /* Scrollbar styling */
+    ::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #1a1a2e;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #0f3460;
+      border-radius: 2px;
+    }
+
+    /* Prevent pull-to-refresh */
+    body {
+      overscroll-behavior-y: contain;
+    }
+
+    /* Hide views by default */
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Modal backdrop */
+    .modal-backdrop {
+      background: rgba(0, 0, 0, 0.78);
+      backdrop-filter: blur(4px);
+    }
+
+    /* Bottom nav safe area */
+    .bottom-nav {
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    /* Input date styling for dark theme */
+    input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(1);
+    }
+  </style>
+</head>
+
+<body class="bg-primary text-text-primary min-h-screen flex flex-col select-none">
+
+  <!-- ============================================================ -->
+  <!-- TOP HEADER BAR                                                -->
+  <!-- ============================================================ -->
+  <header id="app-header"
+    class="bg-surface sticky top-0 z-30 px-3 sm:px-5 py-2.5 sm:py-3 flex items-center justify-between shadow-lg border-b border-accent/30 gap-4 sm:gap-6">
+    <!-- Lado Izquierdo: Logotipo, Título de App y Botón Selector de Sección Compacto (AUT / ATE) -->
+    <div class="flex items-center gap-2 min-w-0 mr-auto">
+      <span class="text-xl flex-shrink-0">🥩</span>
+      <h1 class="text-base font-bold tracking-wide text-white truncate">Rotador</h1>
+      <!-- Botón selector de sección compacto: "AUT" (🛒) / "ATE" (🥩) con margen de seguridad generoso contra toques accidentales -->
+      <button id="btn-toggle-section" type="button"
+        class="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40 hover:bg-blue-500/30 active:scale-95 transition-all flex items-center gap-1.5 shadow-sm cursor-pointer ml-1.5 mr-3 sm:mr-4 flex-shrink-0 select-none"
+        aria-label="Alternar sección: actualmente Autoservicio (AUT)"
+        title="Sección: Autoservicio (AUT). Toca para cambiar a Atendida (ATE)">
+        <span class="pointer-events-none text-xs">🛒</span>
+        <span class="pointer-events-none font-extrabold tracking-wider">AUT</span>
+      </button>
+    </div>
+
+    <!-- Lado Derecho: Indicador Online/Offline + Fecha + Campana con separación generosa -->
+    <div class="flex items-center gap-3 sm:gap-4 flex-shrink-0 ml-3 sm:ml-4">
+      <!-- Indicador de Conexión en Tiempo Real (Online / Offline nativo) -->
+      <div id="connection-status"
+        class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 transition-all"
+        title="Operación 100% offline garantizada">
+        <span id="connection-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+        <span id="connection-text" class="hidden xs:inline">Online</span>
+      </div>
+
+      <!-- Fecha actual -->
+      <span id="header-date" class="text-[11px] text-text-secondary font-medium hidden sm:inline-block"></span>
+
+      <!-- Botón de Notificaciones y Alertas Prioritarias con separación táctil protegida (evita toques accidentales) -->
+      <div class="ml-2 sm:ml-3 pl-2 sm:pl-3 border-l border-accent/30">
+        <button id="btn-open-alerts"
+          class="relative p-2 rounded-lg bg-surface-light border border-accent/30 hover:border-accent text-white transition-all active:scale-95 flex items-center justify-center min-w-[40px] min-h-[40px] cursor-pointer"
+          aria-label="Ver alertas de vencimiento prioritarias">
+          <svg class="w-5 h-5 text-amber-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          </svg>
+          <span id="badge-alerts-count"
+            class="hidden absolute -top-1 -right-1 bg-exp-red text-white text-[10px] font-extrabold w-5 h-5 rounded-full items-center justify-center shadow-md animate-pulse">
+            0
+          </span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================================ -->
+  <!-- MAIN CONTENT AREA                                             -->
+  <!-- ============================================================ -->
+  <main id="main-content" class="flex-1 overflow-y-auto pb-20">
+
+    <!-- ========================================================== -->
+    <!-- VIEW: INVENTARIO                                            -->
+    <!-- ========================================================== -->
+    <section id="view-inventory" class="view active min-h-full">
+
+      <!-- Sub-tabs: Autoservicio (Azul) / Atendida (Ámbar) con margen vertical adecuado -->
+      <div id="inventory-tabs" class="flex bg-surface sticky top-0 z-20 border-b border-accent/40 shadow-sm my-0.5">
+        <button data-section="autoservicio"
+          class="inventory-tab flex-1 py-3 text-xs sm:text-sm font-bold text-center transition-all flex items-center justify-center gap-1.5 border-b-2">
+          <span>🛒</span>
+          <span>AUTOSERVICIO</span>
+        </button>
+        <button data-section="atendida"
+          class="inventory-tab flex-1 py-3 text-xs sm:text-sm font-bold text-center transition-all flex items-center justify-center gap-1.5 border-b-2">
+          <span>🥩</span>
+          <span>ATENDIDA</span>
+        </button>
+      </div>
+
+      <!-- Barra de acciones rápidas (Búsqueda + Carga Masiva PDF) -->
+      <div class="px-4 pt-3 pb-2 flex items-center gap-2">
+        <div class="relative flex-1">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-secondary" fill="none"
+            stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input id="inventory-search" type="search" placeholder="Buscar producto, PLU, EAN o proveedor..."
+            class="w-full bg-surface-light rounded-lg pl-10 pr-4 py-2.5 text-sm text-text-primary placeholder-text-secondary/60 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20">
+        </div>
+
+        <!-- Botón Carga Masiva PDF -->
+        <button id="btn-open-pdf-import"
+          class="px-3 py-2.5 rounded-lg bg-surface-light hover:bg-accent/40 text-xs font-bold text-white border border-accent/40 flex items-center gap-1.5 shadow-sm active:scale-95 transition-all flex-shrink-0"
+          title="Importar lista desde documento PDF">
+          <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          <span class="hidden sm:inline">Cargar</span> PDF
+        </button>
+        <input id="pdf-file-input" type="file" accept=".pdf,application/pdf" class="hidden">
+      </div>
+
+      <!-- Sort / Filter chips -->
+      <div id="inventory-filters" class="px-4 pb-2 flex gap-2 overflow-x-auto">
+        <button data-sort="date"
+          class="sort-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-action/20 text-action border border-action/30 font-medium">
+          Por vencimiento
+        </button>
+        <button data-sort="name"
+          class="sort-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-surface-light text-text-secondary border border-transparent font-medium">
+          Por nombre
+        </button>
+        <button data-filter="expired"
+          class="filter-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-surface-light text-text-secondary border border-transparent font-medium">
+          Vencidos
+        </button>
+        <button data-filter="today"
+          class="filter-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-surface-light text-text-secondary border border-transparent font-medium">
+          Vence hoy
+        </button>
+        <button data-filter="critical"
+          class="filter-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-surface-light text-text-secondary border border-transparent font-medium">
+          Críticos (≤2d)
+        </button>
+        <button data-filter="pedir"
+          class="filter-chip whitespace-nowrap text-xs px-3 py-1.5 rounded-full bg-surface-light text-text-secondary border border-transparent font-medium">
+          Para pedir (≤7d)
+        </button>
+      </div>
+
+      <!-- Leyenda de colores del semáforo de vencimiento (misma escala que getAlertLevel) -->
+      <div class="px-4 py-1.5 flex items-center justify-between text-[10px] text-text-secondary bg-surface/40 mx-4 rounded-lg mb-2 border border-accent/15">
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-exp-red"></span> ≤2d Crítico</span>
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-exp-orange"></span> 3-4d Urgente</span>
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-exp-yellow"></span> 5-7d Pedir</span>
+        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-exp-green"></span> &gt;7d Óptimo</span>
+      </div>
+
+      <!-- Products List -->
+      <div id="product-list" class="px-4 space-y-3 pb-6">
+        <!-- Renderizado dinámicamente por JS -->
+      </div>
+
+      <!-- Empty state -->
+      <div id="inventory-empty" class="hidden flex-col items-center justify-center py-16 px-8 text-center">
+        <svg class="w-16 h-16 text-text-secondary/30 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+        </svg>
+        <p class="text-text-secondary text-sm font-medium">No hay productos en esta sección</p>
+        <p class="text-text-secondary/60 text-xs mt-1">Toca el botón + para registrar uno o importa un PDF</p>
+      </div>
+
+      <!-- FAB: Add Product -->
+      <button id="fab-add-product"
+        class="fixed bottom-24 right-5 z-20 w-14 h-14 bg-action hover:bg-action-hover rounded-full shadow-lg shadow-action/40 flex items-center justify-center transition-transform active:scale-90"
+        aria-label="Agregar producto">
+        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
+        </svg>
+      </button>
+    </section>
+
+    <!-- ========================================================== -->
+    <!-- VIEW: AGREGAR / EDITAR PRODUCTO                             -->
+    <!-- ========================================================== -->
+    <section id="view-add-product" class="view min-h-full">
+      <div class="px-4 pt-4 pb-6">
+        <!-- Title & Cancel -->
+        <div class="flex items-center justify-between mb-5">
+          <div>
+            <h2 id="add-product-title" class="text-lg font-bold">Agregar Producto</h2>
+            <p id="catalog-match-hint" class="text-xs text-exp-green font-medium hidden">✓ Coincidencia con Catálogo Maestro</p>
+          </div>
+          <button id="btn-cancel-product" class="text-text-secondary hover:text-white transition-colors p-1"
+            aria-label="Cancelar">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <form id="product-form" class="space-y-4" novalidate>
+          <!-- Nombre del producto con datalist del Catálogo Maestro -->
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="product-name" class="block text-sm font-medium text-text-secondary">
+                Nombre del producto <span class="text-action">*</span>
+              </label>
+              <span class="text-[11px] text-text-secondary/70">Autocompleta con catálogo</span>
+            </div>
+            <input id="product-name" type="text" list="catalogo-nombres" required autocomplete="off"
+              placeholder="Ej: Bife de Chorizo o Milanesa"
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20">
+            <datalist id="catalogo-nombres"></datalist>
+          </div>
+
+          <!-- PLU / Código de Barras + Scanner + Datalist -->
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="product-code" class="block text-sm font-medium text-text-secondary">
+                Código (PLU o EAN)
+              </label>
+              <span id="product-code-type-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-surface border border-accent/30 text-text-secondary">
+                1-6: PLU | 7+: EAN
+              </span>
+            </div>
+            <div class="flex gap-2">
+              <input id="product-code" type="text" list="catalogo-codigos" inputmode="numeric" autocomplete="off"
+                placeholder="PLU (ej: 4011) o EAN (ej: 7791234567890)"
+                class="flex-1 bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20 font-mono">
+              <datalist id="catalogo-codigos"></datalist>
+              <button id="btn-open-scanner" type="button"
+                class="bg-accent hover:bg-accent/80 rounded-lg px-4 flex items-center justify-center transition-colors shadow-sm"
+                aria-label="Escanear código de barras">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Proveedor (OBLIGATORIO) -->
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="product-provider" class="block text-sm font-medium text-text-secondary">
+                Proveedor <span class="text-action font-bold">*</span>
+              </label>
+              <span class="text-[11px] text-text-secondary/70">Campo obligatorio</span>
+            </div>
+            <input id="product-provider" type="text" list="catalogo-proveedores" required autocomplete="off" placeholder="Ej: Frigorífico Central"
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20">
+            <datalist id="catalogo-proveedores">
+              <option value="Frigorífico Central"></option>
+              <option value="Avícola San Marcos"></option>
+              <option value="Cabaña Porcina"></option>
+              <option value="Frigorífico Pampeano"></option>
+              <option value="Elaboración Propia"></option>
+              <option value="Embutidos Artesanales"></option>
+              <option value="Distribuidora La Pradera"></option>
+            </datalist>
+          </div>
+
+          <!-- Identificador de Lote (Gestión de Múltiples Vencimientos por Producto) -->
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="product-lote" class="block text-sm font-medium text-text-secondary">
+                Identificador de Lote / Batch
+              </label>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-surface border border-accent/30 text-purple-300">
+                Múltiples fechas por producto
+              </span>
+            </div>
+            <input id="product-lote" type="text" placeholder="Ej: Lote 1, L-A12, Cámara 2"
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20 font-mono">
+            <p class="text-[11px] text-text-secondary/70 mt-1">
+              Permite registrar y gestionar varias fechas y cantidades independientes para un mismo producto/PLU.
+            </p>
+          </div>
+
+          <!-- Fecha de Vencimiento -->
+          <div>
+            <label for="product-expiry" class="block text-sm font-medium text-text-secondary mb-1.5">
+              Fecha de Vencimiento <span class="text-action">*</span>
+            </label>
+            <input id="product-expiry" type="date" required
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20">
+          </div>
+
+          <!-- Sección con distinción visual -->
+          <div>
+            <label for="product-section" class="block text-sm font-medium text-text-secondary mb-1.5">Sección</label>
+            <select id="product-section"
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20 appearance-none font-semibold">
+              <option value="autoservicio">🛒 Autoservicio</option>
+              <option value="atendida">🥩 Atendida</option>
+            </select>
+          </div>
+
+          <!-- Tipo de Medida -->
+          <div>
+            <label for="product-measure" class="block text-sm font-medium text-text-secondary mb-1.5">Tipo de Medida</label>
+            <div id="product-measure" class="flex gap-3">
+              <label class="flex-1">
+                <input type="radio" name="measure" value="unidades" class="sr-only peer" checked>
+                <div
+                  class="peer-checked:bg-sec-auto/20 peer-checked:border-sec-auto peer-checked:text-sec-auto bg-surface-light border border-accent/20 rounded-lg py-3 text-center text-sm font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5">
+                  <span>📦</span>
+                  <span>Unidades</span>
+                </div>
+              </label>
+              <label class="flex-1">
+                <input type="radio" name="measure" value="kilogramos" class="sr-only peer">
+                <div
+                  class="peer-checked:bg-sec-atend/20 peer-checked:border-sec-atend peer-checked:text-sec-atend bg-surface-light border border-accent/20 rounded-lg py-3 text-center text-sm font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5">
+                  <span>⚖️</span>
+                  <span>Kilogramos</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Campo OBLIGATORIO de Cantidad / Peso -->
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label for="product-quantity" class="block text-sm font-medium text-text-secondary">
+                Cantidad / Peso <span class="text-action font-bold">*</span>
+              </label>
+              <span id="product-quantity-type-label" class="text-[11px] font-semibold text-sec-auto">Solo enteros (piezas)</span>
+            </div>
+            <div class="relative">
+              <input id="product-quantity" type="number" step="1" min="0.001" required placeholder="Ej: 10"
+                class="w-full bg-surface-light rounded-lg pl-4 pr-16 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20 font-semibold">
+              <span id="product-quantity-unit"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-white bg-surface px-2.5 py-1 rounded border border-accent/30">
+                Uds
+              </span>
+            </div>
+            <p id="product-quantity-hint" class="text-[11px] text-text-secondary/70 mt-1">
+              Para unidades se requieren números enteros (ej. 1, 5, 20).
+            </p>
+          </div>
+
+          <!-- Notas / Lote -->
+          <div>
+            <label for="product-notes" class="block text-sm font-medium text-text-secondary mb-1.5">Notas / Lote</label>
+            <textarea id="product-notes" rows="2" placeholder="Ej: Lote ABC-123, envasado el lunes..."
+              class="w-full bg-surface-light rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-2 focus:ring-action/50 border border-accent/20 resize-none"></textarea>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="flex gap-3 pt-2">
+            <button id="btn-delete-product" type="button"
+              class="hidden px-5 py-3 rounded-lg bg-exp-red/20 text-exp-red text-sm font-semibold border border-exp-red/30 hover:bg-exp-red/30 transition-colors">
+              Eliminar
+            </button>
+            <div class="flex-1"></div>
+            <button id="btn-cancel-product-bottom" type="button"
+              class="px-5 py-3 rounded-lg bg-surface-light text-text-secondary text-sm font-semibold hover:bg-surface transition-colors">
+              Cancelar
+            </button>
+            <button id="btn-save-product" type="submit"
+              class="px-6 py-3 rounded-lg bg-action hover:bg-action-hover text-white text-sm font-bold shadow-lg shadow-action/20 transition-colors active:scale-95">
+              Guardar
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ========================================================== -->
+    <!-- VIEW: PEDIR PRECIOS                                         -->
+    <!-- ========================================================== -->
+    <section id="view-pedir-precios" class="view min-h-full">
+      <!-- Pestañas de sección: cada sección pide sus precios por separado -->
+      <div id="pedir-tabs" class="flex bg-surface sticky top-0 z-20 border-b border-accent/40 shadow-sm my-0.5">
+        <button data-section="autoservicio"
+          class="pedir-tab flex-1 py-3 text-xs sm:text-sm font-bold text-center transition-all flex items-center justify-center gap-1.5 border-b-2">
+          <span>🛒</span><span>AUTOSERVICIO</span>
+        </button>
+        <button data-section="atendida"
+          class="pedir-tab flex-1 py-3 text-xs sm:text-sm font-bold text-center transition-all flex items-center justify-center gap-1.5 border-b-2">
+          <span>🥩</span><span>ATENDIDA</span>
+        </button>
+      </div>
+
+      <div class="px-4 pt-4 pb-6">
+        <!-- Header info -->
+        <div class="mb-5">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-lg font-bold">Pedir Precios</h2>
+            <button id="btn-open-history" type="button"
+              class="px-3 py-1.5 rounded-lg bg-surface-light hover:bg-accent/40 text-xs font-bold text-white border border-accent/40 active:scale-95 transition-all">
+              📜 Historial
+            </button>
+          </div>
+
+          <!-- Day indicator -->
+          <div id="pedir-day-indicator" class="bg-surface-light rounded-xl p-4 border border-accent/20 shadow-md">
+            <div class="flex items-center justify-between">
+              <div>
+                <p id="pedir-day-name" class="text-sm font-semibold">—</p>
+                <p id="pedir-day-status" class="text-xs text-text-secondary mt-0.5">Cargando...</p>
+              </div>
+              <span id="pedir-day-badge" class="text-xs font-bold px-3 py-1.5 rounded-full bg-accent/30 text-text-secondary">—</span>
+            </div>
+
+            <!-- Holiday toggle (Regla festivo lunes -> martes) -->
+            <div class="flex items-center justify-between mt-4 pt-3 border-t border-accent/20">
+              <div>
+                <label for="toggle-holiday" class="text-xs font-medium text-text-primary block">Lunes festivo</label>
+                <span class="text-[11px] text-text-secondary">Traslada el pedido al día martes</span>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input id="toggle-holiday" type="checkbox" class="sr-only peer">
+                <div
+                  class="w-11 h-6 bg-surface rounded-full peer-checked:bg-action peer-focus:ring-2 peer-focus:ring-action/30 transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform peer-checked:after:translate-x-5"></div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter: Sin precio del día anterior -->
+        <div class="bg-surface-light rounded-xl p-3 border border-accent/20 mb-4">
+          <label for="filter-sin-precio" class="flex items-center gap-3 cursor-pointer">
+            <input id="filter-sin-precio" type="checkbox"
+              class="w-4 h-4 rounded bg-surface border-accent/30 text-action focus:ring-action/50 accent-action">
+            <div>
+              <span class="text-xs font-semibold text-text-primary block">Filtrar: Sin precio del día anterior</span>
+              <span class="text-[11px] text-text-secondary">Muestra únicamente los productos que NO recibieron precio en el corte anterior</span>
+            </div>
+          </label>
+        </div>
+
+        <!-- SECCIÓN DE SIMULACIÓN DE PEDIDO DE PRECIOS (TESTING RÁPIDO) -->
+        <div id="simulation-panel" class="bg-gradient-to-r from-purple-950/40 via-surface-light to-blue-950/30 rounded-xl p-4 border border-purple-500/30 shadow-md mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center gap-2">
+              <span class="text-base">🧪</span>
+              <h3 class="text-xs font-bold text-white uppercase tracking-wider">Modo Simulación (Testing)</h3>
+            </div>
+            <span id="simulation-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-semibold border border-purple-500/30">Pruebas Rápidas</span>
+          </div>
+          <p class="text-[11px] text-text-secondary mb-3 leading-relaxed">
+            Permite probar de forma rápida y visual la función de marcar y solicitar precios, asignar cantidades y generar el reporte PDF sin alterar el inventario real.
+          </p>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btn-run-simulation" type="button"
+              class="py-2.5 px-3 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all shadow flex items-center justify-center gap-1.5 active:scale-95">
+              <span>▶️ Iniciar Simulación</span>
+            </button>
+            <button id="btn-clear-simulation" type="button"
+              class="py-2.5 px-3 rounded-lg bg-surface hover:bg-surface-light text-text-secondary hover:text-white text-xs font-semibold border border-accent/30 transition-all flex items-center justify-center gap-1.5 active:scale-95">
+              <span>🗑️ Limpiar Simulación</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Products to order list -->
+        <div id="pedir-product-list" class="space-y-3">
+          <!-- Renderizado por JS -->
+        </div>
+
+        <!-- Empty state -->
+        <div id="pedir-empty" class="hidden flex-col items-center justify-center py-16 text-center">
+          <svg class="w-14 h-14 text-text-secondary/30 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </svg>
+          <p class="text-text-secondary text-sm font-medium">No hay productos por pedir precios</p>
+          <p class="text-text-secondary/60 text-xs mt-1">Los productos con ≤7 días de vencimiento aparecerán aquí</p>
+        </div>
+
+        <!-- Botones de Acción para Reporte y PDF -->
+        <div class="mt-6 space-y-2.5">
+          <!-- Botón Compartir PDF Nativo / WhatsApp -->
+          <button id="btn-share-pdf"
+            class="w-full py-3.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 hover:brightness-110 text-white text-sm font-bold shadow-lg shadow-indigo-600/30 transition-all active:scale-[0.98] flex items-center justify-center gap-2 border border-blue-400/30">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+            </svg>
+            Compartir Reporte PDF (Nativo / WhatsApp)
+          </button>
+
+          <!-- Botón Descargar PDF -->
+          <button id="btn-export-pdf"
+            class="w-full py-3 rounded-xl bg-gradient-to-r from-red-600 via-action to-rose-600 hover:brightness-110 text-white text-xs font-bold shadow-md shadow-action/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2 border border-red-400/30">
+            <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Descargar Reporte en PDF (Precios Pedidos)
+          </button>
+
+          <!-- Botón Copiar Texto Resumen -->
+          <button id="btn-generate-report"
+            class="w-full py-2.5 rounded-xl bg-surface-light hover:bg-surface text-text-secondary hover:text-white text-xs font-semibold border border-accent/30 transition-colors active:scale-[0.98] flex items-center justify-center gap-2">
+            <svg class="w-4 h-4 text-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+            Copiar Resumen en Texto
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================================================== -->
+    <!-- VIEW: CONFIGURACIÓN                                         -->
+    <!-- ========================================================== -->
+    <section id="view-settings" class="view min-h-full">
+      <div class="px-4 pt-4 pb-6">
+        <h2 class="text-lg font-bold mb-6">Configuración</h2>
+
+        <!-- Carga Masiva PDF Section -->
+        <div class="space-y-4 mb-6">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Importación de Datos</h3>
+          <div class="bg-surface-light rounded-xl p-4 border border-accent/20 shadow-md">
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center font-bold text-lg">
+                  📄
+                </div>
+                <div>
+                  <p class="text-sm font-bold text-white">Carga Masiva desde PDF</p>
+                  <p class="text-xs text-text-secondary mt-0.5">Extrae Nombre, PLU y Proveedor</p>
+                </div>
+              </div>
+              <button id="btn-settings-pdf-import"
+                class="px-3 py-1.5 rounded-lg bg-action hover:bg-action-hover text-white text-xs font-bold transition-all shadow-sm">
+                Subir PDF
+              </button>
+            </div>
+            <p class="text-xs text-text-secondary leading-relaxed">
+              Importa facturas, remisiones o listados de compra en PDF. El sistema extrae automáticamente los productos, códigos y el proveedor sin necesidad de internet.
+            </p>
+          </div>
+        </div>
+
+        <!-- Catálogo Maestro Section -->
+        <div class="space-y-4 mb-6">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Base de Datos Interna</h3>
+          <div class="bg-surface-light rounded-xl p-4 border border-accent/20 shadow-md">
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-sec-auto/20 text-sec-auto flex items-center justify-center font-bold">
+                  📚
+                </div>
+                <div>
+                  <p class="text-sm font-bold text-white">Catálogo Maestro</p>
+                  <p id="master-catalog-count" class="text-xs text-text-secondary mt-0.5">12 productos registrados</p>
+                </div>
+              </div>
+              <button id="btn-open-catalog-modal"
+                class="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-semibold transition-colors">
+                Ver Catálogo
+              </button>
+            </div>
+            <p class="text-xs text-text-secondary leading-relaxed">
+              Autocompleta nombre, código y proveedor al registrar o escanear productos.
+            </p>
+          </div>
+        </div>
+
+        <!-- Avisos y retiros -->
+        <div class="space-y-4 mb-6">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Avisos y Control de Merma</h3>
+
+          <div class="bg-surface-light rounded-xl p-4 border border-accent/20 shadow-md">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-bold text-white">Aviso de vencimientos</p>
+                <p id="notif-status-text" class="text-xs text-text-secondary mt-0.5">—</p>
+              </div>
+              <button id="btn-toggle-notifications" type="button"
+                class="px-3 py-1.5 rounded-lg bg-accent hover:bg-accent/80 text-white text-xs font-semibold transition-colors flex-shrink-0">
+                Activar
+              </button>
+            </div>
+            <p class="text-[11px] text-text-secondary/80 leading-relaxed mt-2">
+              Muestra una notificación del sistema al abrir la app si hay productos que vencen en 4 días o menos. No funciona con la app cerrada.
+            </p>
+          </div>
+
+          <button id="btn-open-removals" type="button"
+            class="w-full flex items-center gap-4 bg-surface-light rounded-xl p-4 border border-accent/20 hover:border-accent/40 transition-colors active:scale-[0.98]">
+            <div class="w-10 h-10 rounded-lg bg-exp-red/20 text-exp-red flex items-center justify-center flex-shrink-0">📉</div>
+            <div class="text-left">
+              <p class="text-sm font-semibold">Retiros y merma</p>
+              <p id="removals-summary-text" class="text-xs text-text-secondary mt-0.5">Consulta lo retirado por sección, motivo y proveedor</p>
+            </div>
+          </button>
+        </div>
+
+        <!-- Backup Section -->
+        <div class="space-y-4">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Respaldo y Portabilidad</h3>
+          <div class="bg-surface-light rounded-xl p-3 border border-accent/20">
+            <p id="backup-status-text" class="text-xs text-text-secondary">—</p>
+            <p id="storage-persist-text" class="text-[11px] text-text-secondary/80 mt-1">—</p>
+          </div>
+
+          <!-- Compartir Base de Datos (Web Share API) -->
+          <button id="btn-share-backup"
+            class="w-full flex items-center gap-4 bg-gradient-to-r from-blue-950/40 to-surface-light rounded-xl p-4 border border-blue-500/30 hover:border-blue-500/50 transition-colors active:scale-[0.98]">
+            <div class="w-10 h-10 rounded-lg bg-blue-500/20 text-blue-300 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <p class="text-sm font-semibold text-white">Compartir Base de Datos</p>
+              <p class="text-xs text-text-secondary mt-0.5">Envía el archivo de respaldo por WhatsApp, Correo o Google Drive</p>
+            </div>
+          </button>
+
+          <!-- Export -->
+          <button id="btn-export-json"
+            class="w-full flex items-center gap-4 bg-surface-light rounded-xl p-4 border border-accent/20 hover:border-accent/40 transition-colors active:scale-[0.98]">
+            <div class="w-10 h-10 rounded-lg bg-accent/30 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5 text-action" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <p class="text-sm font-semibold">Descargar Respaldo (JSON)</p>
+              <p class="text-xs text-text-secondary mt-0.5">Guarda una copia de seguridad en tus archivos locales</p>
+            </div>
+          </button>
+
+          <!-- Import -->
+          <button id="btn-import-json"
+            class="w-full flex items-center gap-4 bg-surface-light rounded-xl p-4 border border-accent/20 hover:border-accent/40 transition-colors active:scale-[0.98]">
+            <div class="w-10 h-10 rounded-lg bg-accent/30 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5 text-action" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <p class="text-sm font-semibold">Importar datos (JSON)</p>
+              <p class="text-xs text-text-secondary mt-0.5">Restaura datos desde un archivo de respaldo</p>
+            </div>
+          </button>
+
+          <!-- Limpiar Todo / Resetear -->
+          <button id="btn-clear-all-data"
+            class="w-full flex items-center gap-4 bg-red-950/20 hover:bg-red-950/30 rounded-xl p-4 border border-exp-red/30 hover:border-exp-red/50 transition-colors active:scale-[0.98]">
+            <div class="w-10 h-10 rounded-lg bg-red-500/20 text-red-400 flex items-center justify-center flex-shrink-0">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </div>
+            <div class="text-left">
+              <p class="text-sm font-semibold text-red-300">Vaciar / Restablecer Almacenamiento</p>
+              <p class="text-xs text-text-secondary mt-0.5">Elimina todos los productos e inicializa la app 100% limpia</p>
+            </div>
+          </button>
+
+          <!-- Hidden file input for import -->
+          <input id="import-file-input" type="file" accept=".json,application/json" class="hidden">
+        </div>
+
+        <!-- Documentación Técnica de Almacenamiento Local Offline -->
+        <div class="mt-8 space-y-4">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Almacenamiento Local (Técnico)</h3>
+          <div class="bg-surface-light rounded-xl p-4 border border-accent/20 space-y-3">
+            <div class="flex items-center gap-2">
+              <span class="text-lg">💾</span>
+              <p class="text-xs font-bold text-white uppercase tracking-wider">Persistencia Offline en el Dispositivo</p>
+            </div>
+            <div class="text-xs text-text-secondary space-y-2 leading-relaxed">
+              <p><strong class="text-white">Motor Principal:</strong> IndexedDB (<code class="text-purple-300 font-mono">rotador_db_v1</code>)</p>
+              <p><strong class="text-white">Almacenes (Object Stores):</strong> <code class="text-cyan-300 font-mono">products</code>, <code class="text-cyan-300 font-mono">priceRequests</code>, <code class="text-cyan-300 font-mono">masterCatalog</code>, <code class="text-cyan-300 font-mono">settings</code></p>
+              <p><strong class="text-white">Motor de Respaldo Síncrono:</strong> LocalStorage (<code class="text-yellow-300 font-mono">rotadorData</code>)</p>
+              <p><strong class="text-white">Ubicación Física en Android:</strong> <code class="text-[11px] font-mono text-text-secondary">/data/data/com.android.chrome/app_chrome/Default/IndexedDB/</code></p>
+              <p><strong class="text-white">Ubicación Física en iOS:</strong> Sandbox WebKit Mobile Safari (Local Storage Container)</p>
+              <p><strong class="text-white">Modo Offline:</strong> Service Worker PWA activo (<code class="text-emerald-400 font-mono">rotador-v3</code>). Sin necesidad de internet ni servidores externos.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- App Info -->
+        <div class="mt-6 space-y-4">
+          <h3 class="text-sm font-semibold text-text-secondary uppercase tracking-wider">Información del Sistema</h3>
+          <div class="bg-surface-light rounded-xl p-4 border border-accent/20">
+            <div class="flex items-center gap-3 mb-3">
+              <span class="text-2xl">🥩</span>
+              <div>
+                <p class="text-sm font-bold">Rotador</p>
+                <p id="app-version" class="text-xs text-text-secondary">v2.2.0 (IndexedDB Offline PWA)</p>
+              </div>
+            </div>
+            <p class="text-xs text-text-secondary leading-relaxed">
+              Control estricto de vencimientos y gestión de precios para carnicerías y supermercados. Funciona de manera 100% autónoma y sin conexión.
+            </p>
+            <div class="mt-3 pt-3 border-t border-accent/20 space-y-1">
+              <p id="settings-product-count" class="text-xs text-text-secondary">Productos almacenados: —</p>
+              <p id="settings-storage-info" class="text-xs text-exp-green font-medium">✓ Base de datos local: IndexedDB (Offline nativo)</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: ALERTAS PRIORITARIAS (AL INICIAR O POR CAMPANA)         -->
+  <!-- ============================================================ -->
+  <div id="modal-priority-alerts" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4">
+    <div class="modal-backdrop absolute inset-0"></div>
+    <div class="relative bg-surface rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl border border-exp-red/40 overflow-hidden">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between px-5 py-3.5 bg-red-950/40 border-b border-exp-red/30">
+        <div class="flex items-center gap-2.5">
+          <span class="text-xl">⚠️</span>
+          <div>
+            <h3 class="text-sm font-bold text-white">Alertas de Vencimiento Urgente</h3>
+            <p id="priority-alerts-subtitle" class="text-[11px] text-red-300">Productos que requieren atención prioritaria</p>
+          </div>
+        </div>
+        <button id="btn-close-priority-alerts" class="text-text-secondary hover:text-white p-1" aria-label="Cerrar alertas">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Priority List -->
+      <div id="priority-alerts-list" class="flex-1 overflow-y-auto p-4 space-y-2.5">
+        <!-- Rellenado dinámicamente por JS -->
+      </div>
+
+      <!-- Footer Actions -->
+      <div class="p-3 bg-surface-light border-t border-accent/20 flex gap-2">
+        <button id="btn-priority-go-precios"
+          class="flex-1 py-2.5 rounded-lg bg-action hover:bg-action-hover text-white text-xs font-bold transition-all shadow-md">
+          Ir a Pedir Precios
+        </button>
+        <button id="btn-priority-dismiss"
+          class="flex-1 py-2.5 rounded-lg bg-surface text-text-secondary hover:text-white text-xs font-semibold border border-accent/30 transition-all">
+          Revisar Inventario
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: VISTA PREVIA CARGA MASIVA PDF                           -->
+  <!-- ============================================================ -->
+  <div id="modal-pdf-preview" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4">
+    <div class="modal-backdrop absolute inset-0"></div>
+    <div class="relative bg-surface rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl border border-accent/40 overflow-hidden">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between px-4 py-3 bg-surface-light border-b border-accent/20">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📄</span>
+          <div>
+            <h3 class="text-sm font-bold text-white">Carga Masiva desde Documento PDF</h3>
+            <p id="pdf-preview-stats" class="text-[11px] text-text-secondary">Extracción automática de Nombre, PLU y Proveedor</p>
+          </div>
+        </div>
+        <button id="btn-close-pdf-preview" class="text-text-secondary hover:text-white p-1" aria-label="Cerrar vista previa">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Configuración Global del Lote -->
+      <div class="p-3 bg-surface border-b border-accent/20 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+        <div>
+          <label class="block font-medium text-text-secondary mb-1">Proveedor Detectado / Asignado:</label>
+          <input id="pdf-batch-provider" type="text"
+            class="w-full bg-surface-light rounded-lg px-3 py-2 text-white border border-accent/30 focus:outline-none focus:ring-1 focus:ring-action">
+        </div>
+        <div>
+          <label class="block font-medium text-text-secondary mb-1">Fecha de Vencimiento General:</label>
+          <input id="pdf-batch-expiry" type="date"
+            class="w-full bg-surface-light rounded-lg px-3 py-2 text-white border border-accent/30 focus:outline-none focus:ring-1 focus:ring-action">
+        </div>
+      </div>
+
+      <!-- Lista de Productos Detectados -->
+      <div id="pdf-preview-list" class="flex-1 overflow-y-auto p-3 space-y-2">
+        <!-- Renderizado dinámico -->
+      </div>
+
+      <!-- Footer Actions -->
+      <div class="p-3 bg-surface-light border-t border-accent/20 flex items-center justify-between gap-3">
+        <label class="flex items-center gap-2 cursor-pointer text-xs text-text-secondary">
+          <input id="pdf-preview-select-all" type="checkbox" checked class="w-4 h-4 rounded accent-action">
+          <span>Seleccionar todos</span>
+        </label>
+        <div class="flex gap-2">
+          <button id="btn-cancel-pdf-preview" class="px-4 py-2 rounded-lg bg-surface text-text-secondary text-xs font-semibold border border-accent/30">
+            Cancelar
+          </button>
+          <button id="btn-confirm-pdf-import" class="px-5 py-2 rounded-lg bg-action hover:bg-action-hover text-white text-xs font-bold shadow-md active:scale-95 transition-all flex items-center gap-1.5">
+            <span>📥</span>
+            <span id="btn-confirm-pdf-text">Confirmar e Importar</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: CATÁLOGO MAESTRO                                       -->
+  <!-- ============================================================ -->
+  <div id="modal-catalog" class="fixed inset-0 z-50 hidden flex items-center justify-center p-4">
+    <div class="modal-backdrop absolute inset-0"></div>
+    <div class="relative bg-surface rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col shadow-2xl border border-accent/30 overflow-hidden">
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between px-4 py-3 bg-surface-light border-b border-accent/20">
+        <div class="flex items-center gap-2">
+          <span>📚</span>
+          <h3 class="text-sm font-bold text-white">Catálogo Maestro de Productos</h3>
+        </div>
+        <button id="btn-close-catalog-modal" class="text-text-secondary hover:text-white p-1" aria-label="Cerrar catálogo">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Search in catalog -->
+      <div class="p-3 border-b border-accent/20">
+        <input id="catalog-modal-search" type="search" placeholder="Filtrar catálogo por nombre, código o proveedor..."
+          class="w-full bg-surface rounded-lg px-3 py-2 text-xs text-text-primary placeholder-text-secondary/50 focus:outline-none focus:ring-1 focus:ring-action/50 border border-accent/30">
+      </div>
+
+      <!-- Catalog List -->
+      <div id="catalog-modal-list" class="flex-1 overflow-y-auto p-4 space-y-2">
+        <!-- Rellenado por JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: SCANNER                                                -->
+  <!-- ============================================================ -->
+  <div id="modal-scanner" class="fixed inset-0 z-50 hidden">
+    <div class="modal-backdrop absolute inset-0"></div>
+    <div class="relative flex flex-col h-full bg-primary">
+      <div class="flex items-center justify-between px-4 py-3 bg-surface border-b border-accent/30">
+        <h3 class="text-sm font-bold">Escanear Código de Barras</h3>
+        <button id="btn-close-scanner" class="text-text-secondary hover:text-white p-1 transition-colors"
+          aria-label="Cerrar escáner">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="flex-1 relative overflow-hidden bg-black">
+        <video id="scanner-video" class="absolute inset-0 w-full h-full object-cover" autoplay playsinline muted></video>
+
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div class="absolute inset-0 bg-black/40"></div>
+          <div class="relative w-72 h-40 border-2 border-action rounded-2xl z-10"
+            style="box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);">
+            <div class="absolute -top-0.5 -left-0.5 w-6 h-6 border-t-4 border-l-4 border-action rounded-tl-2xl"></div>
+            <div class="absolute -top-0.5 -right-0.5 w-6 h-6 border-t-4 border-r-4 border-action rounded-tr-2xl"></div>
+            <div class="absolute -bottom-0.5 -left-0.5 w-6 h-6 border-b-4 border-l-4 border-action rounded-bl-2xl"></div>
+            <div class="absolute -bottom-0.5 -right-0.5 w-6 h-6 border-b-4 border-r-4 border-action rounded-br-2xl"></div>
+            <div class="absolute left-2 right-2 h-0.5 bg-action/60 top-1/2 animate-pulse"></div>
+          </div>
+        </div>
+
+        <div class="absolute bottom-6 left-0 right-0 text-center z-20">
+          <p id="scanner-status" class="text-sm text-white/80 bg-black/60 inline-block px-4 py-2 rounded-full border border-white/20">
+            Apunte la cámara al código de barras
+          </p>
+        </div>
+      </div>
+
+      <div class="px-4 py-4 bg-surface">
+        <button id="btn-cancel-scanner"
+          class="w-full py-3 rounded-xl bg-surface-light text-text-secondary text-sm font-semibold hover:bg-accent/20 transition-colors">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: DELETE CONFIRMATION                                    -->
+  <!-- ============================================================ -->
+  <div id="modal-confirm-delete" class="fixed inset-0 z-50 hidden flex items-center justify-center p-6">
+    <div class="modal-backdrop absolute inset-0"></div>
+    <div class="relative bg-surface rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-accent/20">
+      <h3 class="text-base font-bold mb-2">Retirar producto</h3>
+      <p id="confirm-delete-name" class="text-sm text-text-secondary mb-4">Esta acción no se puede deshacer.</p>
+      <label for="confirm-delete-reason" class="block text-xs font-medium text-text-secondary mb-1.5">Motivo del retiro</label>
+      <select id="confirm-delete-reason"
+        class="w-full bg-surface-light rounded-lg px-3 py-2.5 text-sm text-white border border-accent/30 mb-3 focus:outline-none focus:ring-2 focus:ring-action/50">
+        <option value="vencido">Vencido</option>
+        <option value="danado">Dañado / mal estado</option>
+        <option value="rotacion">Retirado por rotación</option>
+        <option value="otro">Otro motivo</option>
+        <option value="error">Error de captura (no registrar)</option>
+      </select>
+      <input id="confirm-delete-note" type="text" maxlength="120" placeholder="Nota opcional"
+        class="w-full bg-surface-light rounded-lg px-3 py-2.5 text-sm text-white placeholder-text-secondary/60 border border-accent/30 mb-5 focus:outline-none focus:ring-2 focus:ring-action/50">
+      <div class="flex gap-3">
+        <button id="btn-confirm-delete-cancel"
+          class="flex-1 py-2.5 rounded-lg bg-surface-light text-text-secondary text-sm font-semibold">
+          Cancelar
+        </button>
+        <button id="btn-confirm-delete-ok" class="flex-1 py-2.5 rounded-lg bg-exp-red text-white text-sm font-bold">
+          Retirar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- MODAL: HISTORIAL (pedidos de precio y retiros / merma)        -->
+  <!-- ============================================================ -->
+  <div id="modal-history" class="fixed inset-0 z-50 hidden flex items-center justify-center p-3 sm:p-4">
+    <div class="modal-backdrop absolute inset-0" data-history-close></div>
+    <div class="relative bg-surface rounded-2xl w-full max-w-md max-h-[88vh] flex flex-col shadow-2xl border border-accent/30">
+      <div class="flex items-center justify-between px-4 pt-4 pb-2">
+        <h3 class="text-base font-bold">Historial</h3>
+        <button type="button" data-history-close class="text-text-secondary hover:text-white p-1" aria-label="Cerrar historial">✕</button>
+      </div>
+      <div class="px-4 flex gap-2 mb-2">
+        <button type="button" data-history-section="autoservicio" class="history-sec flex-1 text-xs font-bold py-2 rounded-lg border">🛒 Autoservicio</button>
+        <button type="button" data-history-section="atendida" class="history-sec flex-1 text-xs font-bold py-2 rounded-lg border">🥩 Atendida</button>
+      </div>
+      <div class="px-4 flex gap-2 mb-2">
+        <button type="button" data-history-tab="pedidos" class="history-tab flex-1 text-xs font-bold py-2 rounded-lg border">Pedidos de precio</button>
+        <button type="button" data-history-tab="retiros" class="history-tab flex-1 text-xs font-bold py-2 rounded-lg border">Retiros / merma</button>
+      </div>
+      <div id="history-period-row" class="px-4 mb-2 hidden">
+        <select id="history-period"
+          class="w-full bg-surface-light rounded-lg px-3 py-2 text-xs text-white border border-accent/30 focus:outline-none">
+          <option value="30">Últimos 30 días</option>
+          <option value="90">Últimos 90 días</option>
+          <option value="0">Todo el historial</option>
+        </select>
+      </div>
+      <div id="history-content" class="flex-1 overflow-y-auto px-4 pb-4 space-y-2.5"></div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TOAST NOTIFICATION                                            -->
+  <!-- ============================================================ -->
+  <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 hidden">
+    <div
+      class="bg-surface border border-accent/40 rounded-xl px-5 py-3 shadow-2xl flex items-center gap-3 min-w-[220px]">
+      <span id="toast-icon" class="text-lg font-bold">✓</span>
+      <p id="toast-message" class="text-sm font-medium">Mensaje</p>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- BOTTOM NAVIGATION BAR                                         -->
+  <!-- ============================================================ -->
+  <nav id="bottom-nav"
+    class="bottom-nav fixed bottom-0 left-0 right-0 z-30 bg-surface border-t border-accent/30 shadow-2xl">
+    <div class="flex items-center justify-around h-16 max-w-lg mx-auto">
+      <!-- Inventario -->
+      <button data-view="view-inventory"
+        class="nav-btn flex flex-col items-center justify-center gap-1 flex-1 h-full text-action transition-colors"
+        aria-label="Inventario">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+        </svg>
+        <span class="text-[10px] font-semibold">Inventario</span>
+      </button>
+
+      <!-- Pedir Precios -->
+      <button data-view="view-pedir-precios"
+        class="nav-btn flex flex-col items-center justify-center gap-1 flex-1 h-full text-text-secondary transition-colors"
+        aria-label="Pedir Precios">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+        </svg>
+        <span class="text-[10px] font-semibold">Precios</span>
+      </button>
+
+      <!-- Configuración -->
+      <button data-view="view-settings"
+        class="nav-btn flex flex-col items-center justify-center gap-1 flex-1 h-full text-text-secondary transition-colors"
+        aria-label="Configuración">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+        <span class="text-[10px] font-semibold">Ajustes</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- App JS (module) -->
+  <script src="js/app.js" type="module"></script>
+
+</body>
+
+</html>
